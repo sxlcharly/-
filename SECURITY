@@ -1,0 +1,1367 @@
+
+									(一)
+			1、常用系统监控命令
+查看内存与交换分区信息
+	]# free   //查看内存信息
+	]# free | awk '/Mem/{print $4}'  //查看剩余内存容量 单位KB	
+	]# swapon -s  //查看交换分区信息
+	]# df | awk '/\/$/{print $5}'   //查看根分区的利用率
+	]# uptime |awk '{print $NF}' //仅查看CPU的15分钟平均负载
+	]# ifconfig eth0 |awk '/inet /{print $2}' //查看IP地址信息
+	]# ifconfig eth0 |awk '/RX p/{print $5}'  //网卡接受数据包流量
+	]# ifconfig eth0 |awk '/TX p/{print $5}'  //网卡发送数据包流量
+	]# traceroute traceroute www.tmooc.cn	//统计下一跳的个数 (到达目标主机需要经过的路由器) 
+	]# iostat	//用于报告中央处理器 (CPU) 统计信息和整个系统,适配器,tty,设备,磁盘和CD-ROM 的输入/输出统计信息
+	]# ss -ntulp  //查看本机监听的所有端口
+		-n以数字显示端口号
+		-t显示tcp连接
+		-u显示udp连接
+		-p显示监听端口对应的程序名称	
+	
+			2、Zabbix平台
+监控目的
+	报告系统运行状况
+		每一部分必须同时监控
+		内容包括吞吐量,反映时间,使用率
+	提前发现问题
+		进行服务器性能调整前,知道调整什么
+		找出系统的瓶颈在哪
+
+监控资源类别
+	公开数据
+		Web, FTP,SSH,数据库服务等
+		TCP/UIP端口
+	私有数据
+		CPU ,内存, 磁盘,网卡流量
+		用户,进程
+
+Cacti
+	基于 SNMP 协议的监控软件,较强大的绘图能力
+Nagios
+	基于Agent 监控,强大的状态价差与报警机制
+	插件极多,自己写监控脚本潜入到 Nagios 非常方便
+Zabbix
+	基于多种监控机制,支持分布式监控
+		
+				3、Zabbix监控服务(基础)
+Zabbix简介
+	Zabbix是一个高度集成的监控解决方案
+	可以实现企业级得开源分布式监控
+	Zabbix通过C/S模式采集监控数据
+	Zabbix通过B/S模式实现Web管理
+监控拓扑
+	监控服务器
+		监控服务器可以通过SNMP 或 Agent 采集数据
+		数据可以写入MySQL , Oracle 等数据库中
+		服务器使用 LNMP 实现 web 前端管理
+	被监控主机
+		被监控主机需要安装 Agent
+		常见的网络设备一般支持 SNMP
+	
+需要搭建在 LNMP 平台上    // (安装需要的包)
+	]# yum -y install gcc pcre-devel openssl-devel
+	]# yum -y install php php-mysql mariadb mariadb-devel mariadb-server
+	]# yum -y  install  php-fpm-5.4.16-42.el7.x86_64.rpm
+
+	//配置Nginx支持PHP动态网站，因为有大量PHP脚本需要执行，因此还需要开启Nginx的各种fastcgi缓存，加速PHP脚本的执行速度。
+	]# vim /usr/local/nginx/conf/nginx.conf
+	… …
+	http{
+	… …
+		//若不修改  访问的网页没有内容
+	    fastcgi_buffers 8 16k;  //缓存php生成的页面内容，8个16k
+	    fastcgi_buffer_size 32k; //缓存php生产的头部信息
+	    fastcgi_connect_timeout 300;  //连接PHP的超时时间
+	    fastcgi_send_timeout 300;    //发送请求的超时时间
+	    fastcgi_read_timeout 300;    //读取请求的超时时间
+	location ~ \.php$ {
+		        root           html;
+		        fastcgi_pass   127.0.0.1:9000;
+		        fastcgi_index  index.php;
+		        include        fastcgi.conf;
+		}
+启动服务	//编写PHP测试网页,测试是否搭建完成
+	]# systemctl start  mariadb
+	]# systemctl start  php-fpm
+	]# /usr/local/nginx/sbin/nginx
+
+						4、部署Zabbix监控服务器
+4.1、安装源码Zabbix
+	]# yum -y install net-snmp-devel curl-devel libevent-devel
+	]# tar -xf zabbix-3.4.4.tar.gz
+	]# cd zabbix-3.4.4
+	]# configure --enable-server --enable-proxy --enable-agent --with-mysql=/usr/bin/mysql_config --with-net-snmp --with-libcurl
+	]# make install    		(直接安装)
+	// --enable-server安装部署zabbix服务器端软件
+	// --enable-agent安装部署zabbix被监控端软件
+	// --enable-proxy安装部署zabbix代理相关软件
+	// --with-mysql配置mysql_config路径
+	// --with-net-snmp允许zabbix通过snmp协议监控其他设备
+	// --with-libcurl安装相关curl库文件，这样zabbix就可以通过curl连接http等服务，测试被监控主机服务的状态	
+
+初始化准备	(创建数据库，上线Zabbix的Web页面)
+	]# mysql
+	mysql> create database zabbix character set utf8;	//创建数据库，支持中文字符集
+	mysql> grant all on zabbix.* to zabbix@"localhost" identified by "zabbix";		//创建可以访问数据库的账户与密码
+	]# cd database/mysql/
+	]# mysql -uzabbix -pzabbix zabbix < schema.sql
+	]# mysql -uzabbix -pzabbix zabbix < images.sql
+	]# mysql -uzabbix -pzabbix zabbix < data.sql
+//zabbix源码包目录下，有提前准备好的数据,使用mysql导入这些数据即可（注意导入顺序）
+
+上线Zabbix的Web页面
+	]# cd zabbix-3.4.4/frontends/php/
+	]# cp -a * /usr/local/nginx/html/
+	]# chmod -R 777 /usr/local/nginx/html/'*'	//授予其他用户对这个目录读写权限.若不修改 安装最后一步会有报错
+
+	firefox http://192.168.2.5/index.php		//访问安装
+
+解决问题, 安装依赖包
+	]# yum -y install  php-gd php-xml php-ldap php-bcmath  php-mbstring	//若不安装第二步出错报红
+	]# vim /etc/php.ini   //修改为Zabbix所要求的值,可根据报红修改问题
+	date.timezone = Asia/Shanghai 	//设置时区
+	max_execution_time = 300        //最大执行时间，秒
+	post_max_size = 32M             //POST数据最大容量
+	max_input_time = 300            //服务器接收数据的时间限制
+	memory_limit = 128M             //内存容量限制
+
+修改Zabbix_server配置文件，设置数据库相关参数，启动Zabbix_server服务
+	]# vim /usr/local/etc/zabbix_server.conf
+	DBHost=localhost	//数据库主机，默认该行被注释
+	DBName=zabbix		//设置数据库名称
+	DBUser=zabbix		//设置数据库账户
+	DBPassword=zabbix	//设置数据库密码，默认该行被注释
+	LogFile=/tmp/zabbix_server.log  //设置日志，仅查看以下即可  
+	]# useradd -s /sbin/nologin zabbix		//不创建用户无法启动服务
+	]# zabbix_server  //启动服务
+	]# netsat -ntulp |grep zabbix_server	//确认连接状态，端口10051
+
+						4、配置被监控主机
+安装软件
+	]# yum -y install gcc pcre-devel
+	]# cd zabbix-3.4.4
+	]# ./configure --enable-agent	//用来连接监控服务器
+	]# make && make install 	
+	Server=127.0.0.1,192.168.2.5   //允许访问服务地址列表（被动监控模式    主动被动不能同时开启 默认开启被动）
+	ServerActive=127.0.0.1,192.168.2.5   //监控服务器IP地址（主动监控模式）
+	Hostname=zabbixclient_web1      //被监控端自己的主机名
+	LogFile=/tmp/zabbix_server.log  //设置日志文件
+	EnableRemoteCommands=1   //监控异常后，是否允许服务器远程过来执行命令，如重启某个服务
+	UnsafeUserParameters=1    //是否允许自定义key监控
+	]# zabbix_agentd  //启动监控agent
+
+						5、添加监控主机
+启动zabbix_server 服务    浏览器访问 http://192.168.2.5 
+
+点击 Configuration（配置）-->Hosts（主机）-->Create Host（创建主机）
+//添加被监控主机时，需要根据提示输入被监控Linux主机的主机名称（最好与电脑的主机名一致，但也允许不一致）、群组、IP地址等参数
+//Zabbix通过监控模板来对监控对象实施具体的监控功能，根据模板来定义需要监控哪些数据，对于Linux服务器的监控，Zabbix已经内置了相关的模板（Template OS Linux），选择模板并链接到主机即可
+//查看监控数据，登录Zabbix Web控制台，点击Monitoring(监控中)—> Latest data(最新数据)，正过滤器中填写过滤条件，根据监控组和监控主机选择需要查看哪些监控数据
+
+
+
+						6、自定义Zabbix监控项目
+被监控主机创建自定义key
+	自定义key语法格式为：UserParameter=自定义key名称,命令  //需要配置文件开启允许自定义key值  监控主机与被监控主机都要要开启	(UserParameter=1)
+	]# vim /usr/local/etc/zabbix_agentd.conf
+	265 Include=/usr/local/etc/zabbix_agentd.conf.d/ //加载自定义监控配置文件目录
+	280 UnsafeUserParameters=1    //是否允许自定义key监控
+
+创建自定义key
+	]# vim  /usr/local/etc/zabbix_agentd.conf.d/count.line.passwd
+	UserParameter=count.line.passwd,wc -l /etc/passwd | awk ' {print $1} '
+	//监控用户
+测试自定义key是否正常工作
+	]# killall  zabbix_agentd
+	]# zabbix_agentd   //重启agent服务
+	]# zabbix_get -s 127.0.0.1 -k count.line.passwd
+
+创建监控模板
+	Configuration(配置)-->Template(模板)-->Create template(创建模板)
+创建完成模板后，默认模板中没有任何应用、项目、触发器、图形等资源。这里需要点击模板后面的Application（应用集）链接打开创建应用的页面
+	与创建应用集一样，在模板中还需要创建监控项目，接下来，还需要给项目设置名称及对应的自定义key，
+
+将模板链接到被监控主机
+	主机Configuration（配置）-->Hosts（主机）
+	点击需要的被监控主机链接，打开监控主机设置页面，在Template（模板）页面中选择需要链接到该主机的模板，在此选择刚刚创建的模板count_line.passwd添加即可
+	点击需要的被监控主机链接，打开监控主机设置页面，在Template（模板）页面中选择需要链接到该主机的模板，在此选择刚刚创建的模板count_line.passwd添加即可
+
+
+
+############################################################################
+							(二)
+				1、Zabbix报警机制
+1 Zabbix报警机制
+	1.1 触发器？
+	1.2 创建触发器  cfq1
+	1.3 创建动作
+		1.3.1 准备邮件服务器和收发邮件的邮箱	
+  129  rpm -q postfix || yum  -y  install  postfix
+  130  systemctl  start postfix
+  131  systemctl  enable postfix
+  132  netstat -utnlp | grep :25
+  133  echo "127.0.0.1  zabbix-server" >> /etc/hosts
+  134  cat /etc/hosts
+  135  grep zabbix /etc/passwd
+  136  grep root /etc/passwd
+  139  yum -y install mailx
+  140  mail  -s  "xxx" zabbix  < /etc/hosts
+  141  su - zabbix  切换到zabbix用户
+  142  mail  查看邮件
+       1       查看编号1的邮件内容
+       exit  退出查看连接
+       exit  退回到管理员root用户
+              1.3.2 登陆管理页面做如下配置
+	 		1 设置邮件服务器
+			2 设置收件邮箱地址
+			3 创建动作  act1
+			4 测试配置
+				4.1 触发器被触发后执行动作
+				4.2 查看是否收到邮件
+			 
+2 Zabbix进阶操作
+	2.1 自动发现
+		1 自动发现的定义？
+		2 配置自动发现：
+			登陆管理页面做如下操作：
+				1 创建自动发现规则 auto1
+Configuration（配置）-->Discovery（自动发现）-->Create discovery rule（创建发现规则）
+				2 创建Action动作（发现主机后自动执行什么动作）
+填写自动发现的IP范围（逗号隔开可以写多个），多久做一次自动发现	配置检查的方式：Ping、HTTP、FTP、Agent的自定义key等检查
+
+				3 通过动作，执行添加主机，链接模板到主机等操作
+通过Configuration（配置）--> Actions Event source(事件源)：自动发现(Discovery)-->Create action（创建动作）
+
+		3 测试配置：  
+			创建新的虚拟机：
+			  配置ip地址在192.168.2.6～254 之间 且运行httpd服务
+
+			在管理页面查看已经监控的主机列表 有 新创建的主机地址
+ 
+	2.2 主被动监控
+		2.2.1 主被动监控介绍？
+		2.2.2 配置主动监控	
+			1 配置客户端  192.168.2.201
+				1 安装源码zabbix软件
+[root@web201 ~]# yum -y install gcc pcre-devel
+[root@web201 ~]# tar -xf zabbix-3.4.4.tar.gz 
+[root@web201 ~]# cd zabbix-3.4.4/
+[root@web201 ~]#./configure --enable-agent
+[root@web201 ~]# make install
+				2 修改主配置文件  
+//默认zabbix采用的是被动监控，主动和被动都是对被监控端主机而言的
+//被动监控：Server向Agent发起连接，发送监控key，Agent接受请求，响应监控数据。
+//主动监控：Agent向Server发起连接，Agent请求需要检测的监控项目列表，Server响应Agent发送一个items列表，Agent确认收到监控列表，TCP连接完成，会话关闭，Agent开始周期性地收集数据。
+//区别：Server不用每次需要数据都连接Agent，Agent会自己收集数据并处理数据，Server仅需要保存数据即可。
+//当监控主机达到一定量级后，Zabbix服务器会越来越慢，此时，可以考虑使用主动监控，释放服务器的压力。
+//另外，Zabbix也支持分布式监控，也是可以考虑的方案。
+
+]# vim /usr/local/etc/zabbix_agentd.conf
+#Server=127.0.0.1		
+StartAgents=0			//修改被监控主机agent为主动监控模式 , 被动监控时启动多个进程 , 设置为0，则禁止被动监控，不启动zabbix_agentd服务
+ServerActive=192.168.2.5  	//允许哪些主机监控本机（主动模式），一定要取消127.0.0.1
+Hostname=web201  		//告诉监控服务器，是谁发的数据信息 , 一定要和zabbix服务器配置的监控主机名称一致（后面设置）
+RefreshActiveChecks=120 //默认120秒检测一次
+UnsafeUserParameters=1	//允许自定义key
+
+步骤二：创建主动监控的监控模板
+	为了方便，克隆系统自带模板
+	Configuration（配置）-->Templates（模板）-->选择Template OS Linux-->全克隆
+1 修改模板中的监控项目的监控模式
+	将模板中的所有监控项目全部修改为主动监控模式，通过Configuration（配置）-->Templates（模板）-->选择新克隆的模板，点击后面的Items（监控项）-->点击全	选，选择所有监控项目，点击批量更新，将类型修改为：Zabbix Agent（Active主动模式）
+2 禁用部分监控项目
+	批量修改监控项的监控模式后，并非所有监控项目都支持主动模式，批量修改后，会发现有几个没有修改主动模式成功，说明，这些监控项目不支持主动模式，关闭即可。
+
+步骤三：添加监控主机
+1 手动添加监控主机（主动模式监控）
+	在Zabbix监控服务器，添加被监控的主机（主动模式），设置主机名称：zabbixclient_web2	（必须与被监控端的配置文件Hostname一致），将主机添加到Linux servers组，IP地址修改为0.0.0.0，端口设置为0
+
+		`		3 启动服务
+web201 ~]# useradd  zabbix 
+web201 ~]# zabbix_agentd
+				4 只有进程没有端口
+web201 ~]# ps -C zabbix_agentd
+web201 ~]# netstat -utnlp  | grep  :10050
+
+			2 配置服务器    192.168.2.5			
+				登陆管理页面做如下操作：
+				 1 克隆已有模板
+
+				 2 修改监控项模式
+
+				 3 添加监控主机201
+
+				 4 选择监控模板
+				
+				 5 查看监控数据
+	2.3 拓扑图与聚合图形
+		2.3.1 拓扑图:绘制拓扑图可以快速了解服务器架构
+		2.3.2 聚合图形:在一个页面显示多个数据图表，方便了解多组数据
+
+
+3 监控案例
+	3.1 监控Nginx  192.168.2.100
+1 安装nginx软件，开启status模块
+2 自定义监控key
+	]# vim /usr/local/etc/zabbix_agentd.conf.d/nginx.status
+	UserParameter=nginx.status[*],/usr/local/bin/nginx_status.sh $1
+	]# killall zabbix_agentd
+	]# zabbix_agentd
+3 自定义监控脚本（仅供参考，未检测完整状态）
+	]# vim /usr/local/bin/nginx_status.sh
+	#!/bin/bash
+	case $1 in
+	active)
+	    curl -s http://192.168.2.100/status |awk '/Active/{print $NF}';;
+	waiting)
+	    curl -s http://192.168.2.100/status |awk '/Waiting/{print $NF}';;
+	accepts)
+	    curl -s http://192.168.2.100/status |awk 'NR==3{print $2}';;
+	esac
+	]# chmod +x  /usr/local/bin/nginx_status.sh
+4 测试效果
+	]# zabbix_get  -s 127.0.0.1 -k 'nginx.status[accepts]'
+
+	3.2 监控网络连接状态 192.168.2.100
+
+熟悉TCP三次握手,四次断开
+//三次握手
+	ACK 				SYN 			FIN
+(回应连接状态标记)		(建立连接标记)		(断开连接标记)
+//四次断开
+	
+	
+//连接状态,分析第二列信息
+SYN_SEN   SYN_RCVD   ESTABLISHED (三种连接时的状态)
+				         (表示连接已建立,estab 简写)
+
+FIN_WAIT1  CLOSE_WAIT  FIN_WAIT2  TIME_WAIT  LAST_ACK  (断开状态)
+FIN_WAIT[1,2] //这种状态较多时,表示等待别人回请求断开包较多
+CLOSE_WAIT	//这种状态较多表示,向我发起断开连接的请求较多
+
+	]# ab -c 1000 -n 100000 http://192.168.2.100/
+	estab		//表示正在通信
+	close_wait	//表示被动关闭
+	time_wait	//表示主动关闭
+自定义监控脚本（仅供参考，未检测完整状态）
+	]# vim /usr/local/bin/net_status.sh 
+	#!/bin/bash
+	case $1 in
+	estab)
+	    ss -antp |awk '/^ESTAB/{x++} END{print x}';;
+	close_wait)
+	    ss -antp |awk '/^CLOSE-WAIT/{x++} END{print x}';;
+	time_wait)
+	    ss -antp |awk '/^TIME-WAIT/{x++} END{print x}';;
+	esac 
+	]# chmod +x  /usr/local/bin/net_status.sh
+测试效果
+	]# zabbix_get  -s 127.0.0.1 -k 'net.status[time_wait]'
+
+在服务端添加此监控项
+
+
+
+
+##############################################################################
+							(三)
+
+					Linux基本防护
+
+1 用户账号安全
+	设置账号有效期
+		chage -d 0 用户名	//第一次登录用户强制修改密码	
+		chage -l 用户名		//查看用户年龄信息
+		chage -E yyyy-mm-dd	用户名	//修改用户有效期
+
+查看账户是否设置密码(两种方法)
+	利用 passwd 查看
+		passwd -l 用户		//锁定用户密码 锁定后无法登陆
+		passwd -u 用户		//解锁用户密码
+		passwd -S 用户		//查看密码状态
+	也可以查看/etc/shadow 文件看用户密码的状态信息 "!!" 表示未设置密码,即被锁定
+
+	定义创建用户时的默认配置    (/etc/login.defs这个配置文件，决定了账户密码的默认有效期) 
+		]# cat /etc/login.defs
+		PASS_MAX_DAYS    99999  //密码最长有效期
+		PASS_MIN_DAYS    0     //密码最短有效期
+		PASS_MIN_LEN    5  //密码最短长度
+		PASS_WARN_AGE    7     //密码过期前几天提示警告信息
+		UID_MIN   1000 //UID最小值
+		UID_MAX   60000  //UID最大值	
+
+	修改tty登录的提示信息，隐藏系统版本
+		配置文件 /etc/issue、 /etc/issue.net
+		分别适用于 本地、远程登录(网络连接)
+		把文件内容改为其他内容完成系统隐藏
+
+		]# vim /etc/issue
+		\S		//获取操作系统版本
+		Kernel \r on an \m	(Kernel 获取描述信息) (r-获取内核 on an 描述  m- 获取操作系统架构 )
+		
+2 文件系统安全
+	RHEL5 / RHEL6		//对软件服务的操作
+		chkconfig httpd on|off  //开机自启/关闭
+		service httpd start|stop|restart|status //启服务/停服务/重启服务/查看状态
+
+	RHEL7				//对软件服务的操作
+		systemctl enable|disable httpd	//开机自启/关闭
+		systemctl start|stop|restart|status httpd  //启服务/停服务/重启服务/查看状态
+
+	锁定/解锁保护文件  (对所有用户有效,包括root)
+		ext3/ext4的文件属性控制
+			chattr、lsattr
+		+   -   =控制方式
+		属性  i  不可变
+		属性  a  仅可追加
+	# chattr +i  文件名   //锁定文件（无法修改、删除等）
+	# chattr -i  文件名   //解锁文件
+	# chattr +a  文件名   //锁定后文件仅可追加
+	# chattr -a  文件名   //解锁文件
+	# lsattr 文件名           //查看文件特殊属性
+
+							用户切换与提权
+
+1 su 切换用户身份
+	Substitute User  换人
+		快速切换为指定的其他用户
+		普通用户执行时 需验证目标用户的口令
+		root 无需验证口令
+	命令格式
+		su - 用户
+		su - -c "命令"  目标用户
+		su - 用户	//切换用户的同时把系统环境切换到目标用户
+		su 用户		//仅切换用户不切换到目标用户的系统环境
+		whoami  //查看当前用户
+		echo $PATH		//查看系统所在环境
+		echo $PWD		//查看所在目录 
+
+	分析 su 切换的使用情况
+		安全日志 /etc/log/secure
+		记录 su 验证、Shell开启与关闭
+	
+2 sudo 提升执行权限  
+	Super or another Do
+		系统的管理员root用户,配置系统的普通用户 有执行自身命令的权限
+		管理员预先为用户设置执行权限
+		被授权用户有权执行授权命令,验证之间的口令
+	// 普通用户执行提权命令 需用 sudo 来调用
+		sudo "提权命令"
+	//查看提权命令
+		sudo -l   (首次查看需要用户登录密码)
+	//配置 sudo 提权
+		修改 配置文件 方法
+			visudo		//专门用来打开提权命令配置文件
+			vim /etc/sudoers
+	//授权记录格式
+		用户	     主机列表=命令列表		//用逗号隔开,省略表示 root 命令写绝对路径
+		%组名	主机列表=命令列表		
+	%wheel ALL=(ALL) ALL  //wheel 组的用户无需验证可执行所有命令
+	dc client=/usr/bin/systemctl * mariadb.service ,/usr/bin/vim /etc/my.cnf	//dc 用户拥有对 mariadb 服务的开关查 权限 并可以编辑 my.cnf 文件
+	mike  client=/usr/bin/'*',!/sbin/ifconfig eth0  //拥有/usr/bin 下的所有命令 但禁止修改 eth0 网卡的参数
+
+	//分析 sudo 提权的使用情况
+		修改全局配置,启用日志
+		Defaults logfile="/var/log/sudo.log"
+	//sudo 别名设置
+		主要用途	
+			提高可重用性,易读性
+			简化配置,使用记录很有条理
+		]# vim /etc/sudoers			//别名名称必须大写
+		Host_Alias  别名=主机名
+		Cmnd_Alias 	别名=执行命令
+		User_Alias 	别名=用户名
+
+						SSH访问控制
+
+1 SSH 基本防护
+	安全隐患
+		密码嗅探,键盘记录
+		暴力枚举账号,猜解密码
+	常见的防护措施
+		用户限制,黑白名单
+		更改验证方式 ( 密码-->密钥对)
+		防火墙
+
+	sshd 基本安全配置
+		配置文件
+			]# vim /etc/ssh/sshd_config
+		Protocol 2  //SSH协议 v2版协议
+		PermitRootLogin no   //禁止root用户登录
+		PermitEmptyPasswords no   //禁止密码为空的用户登录
+		UseDNS  no      //不解析客户机地址,节省时间
+		LoginGraceTime  1m  //登录限时
+		MaxAuthTries  3      //每连接最多认证次数
+
+	针对SSH访问采用仅允许的策略，未明确列出的用户一概拒绝登录 
+	//白名单 : 仅仅 允许使用白名单列表里的用户连接ssh服务
+AllowUsers	root@192.168.4.254   mike
+
+	//黑名单 : 仅仅不允许黑名单列表里的用户 连接ssh服务
+DenyUsers       mike  root@192.168.4.254
+
+	添加AllowUsers策略，仅允许用户zhangsan、tom、useradm，其中useradm只能从网段192.168.4.0/24登录
+	]# vim /etc/ssh/sshd_config
+	AllowUsers zhangsan tom useradm@192.168.4.0/24   //定义账户白名单
+	#DenyUsers  USER1  USER2         //定义账户黑名单
+	#DenyGroups  GROUP1 GROUP2       //定义组黑名单
+	#AllowGroups  GROUP1 GROUP2      //定义组白名单
+
+2 SSH密钥对验证
+	//口令验证
+		检查登录用户的口令是否一致
+	]# vim /etc/ssh/sshd_config
+	65 PasswordAuthentication yes    //支持口令验证
+
+	//秘钥验证
+		检查客户端私钥与服务器上的公钥是否匹配
+	]# vim /etc/ssh/sshd_config
+	43 PubkeyAuthentication yes     //开启秘钥验证
+	47 AuthorizedKeysFile   .ssh/authorized_keys	//秘钥存放位置
+	//创建密钥对
+		ssh-keygen
+		可以手动指定加密算法 ( -t rsa 或 -t dsa)
+		默认采用 rsa 加密
+	//部署 ssh 公钥
+		一  通过 ssh-copy-id 自动部署		
+			好处  : 自动添加到秘钥文件里
+			局限  : 要求 SSH 口令认证可用
+		二  通过FTP 等方式上传,手动添加
+			好处   : 灵活,使用范围广
+			局限   : 操作繁琐,易出错
+
+
+							SELinux安全防护
+
+1 SELinux策略设置
+	一套强化Linux 安全的扩展模块
+	美国国家安全局主导开发
+	
+	集成到内核(2.6及以上)
+	操作系统提供可指定的策略,管理工具
+
+enforcing	//强制模式
+permissive	//宽松模式
+disabled	//已禁用
+
+SELinux 策略集  (三种保护模式)
+	SELINUXTYPE=targeted	//仅保护最常见/关键的网络服务,其他不限制
+				=minium		//介于两者之间
+				=mls		//多级安全保护
+	临时调整  setenforce
+		setenforce	1  强制模式
+		setenforce  0  宽松模式
+
+	主要软件包
+		selinux-policy   selinux-policy-targeted  libselinux-utils li		 bselinux-utils  coreutils  policycoreutils
+
+	sestatus 	//查看 selinux 是否开启	
+
+2 查看安全上下文
+	Security Context
+		为文件/目录/设备标记访问控制属性
+
+	//属性构成	
+		~]# ls -lZ /var/www/html/a1.html //查看a1.html文件的安全上下文
+		~]# ps aux -Z 		//查看进程的安全上下文
+
+		用户:角色:访问类型:选项
+		system_u:object_r:httpd_sys_content_t:s0	//冒号间隔 第三列为访问类型
+	//修改安全上下文
+		使用 chcon 工具
+		chcon 选项 类型 文件/目录
+		-t 指定访问类型
+		-R 递归修改
+		~]# chcon -t 访问类型 目录/文件
+		~]# chcon -t httpd_sys_content_t /var/www/html/a1.html
+		~]# chcon -R -t 访问类型 目录/文件
+		~]# chcon -R -t httpd_sys_content_t /var/www/html/
+	//一般操作规律
+		移动的文件,原有的上下文属性不变
+		复制的文件,自动继承目标位置的上下文
+	//重置安全上下文
+		使用 restorecon 工具
+			恢复文件的上下文标签为父目录标签
+			-R 递归修改
+		~]# restorecon 目录/文件
+//	创建 /.autorelabel 文件   当有大量的文件标签不正确时可创建此文件
+		下次重启后所有文件的安全上下文全部重置	
+3 调整 SELinux 布尔值   (功能开关)
+	使用 getsebool 查看
+		-a 列出所有布尔值
+	~]# getsebool -a |grep http
+
+	使用 setsebool 设置
+		-P 永久更改,重启后依然有效
+	~]# setsebool -P ftpd_anon_write on
+
+	//vsftpd 配置及其下载上传
+		]# vim /etc/vsftpd/vsftpd.conf
+		anonymous_enable=YES    //开启匿名访问
+		anon_upload_enable=YES   //允许上传文件
+		anon_mkdir_write_enable=YES   //允许上传目录
+	
+		//命令行下访问 vsftpd 服务 安装 ftp 软件包
+		~]# ftp 目标IP
+		Name ftp
+		passwd 回车
+		ftp> get //下载
+		ftp> lcd	//切换本地目录 用来上传文件
+		ftp> put //上传文件
+
+4 查看 selinux 日志排错
+	查看是否安装 setroubleshoot 软件包	(命令 shoot)
+		 ~]# yum -y install setroubleshoot*   //安装三个包 重启系统
+	日志信息 /var/log/messages
+	根据日志排错
+
+#####################################################################
+							(四)
+					
+						加密与解密
+1 加/解密概述
+	 1.1 加密的目的及方式
+	    	--确保数据的机密性
+			对称加密 : 加密/解密用同一个秘钥
+			非对称加密 : 加密/解密用不同的秘钥
+	   	--保护信息的完整性
+			信息的摘要 : 基于输入的信息生长度较短 ,位数固定的散列值
+	1.2 常见的加密算法
+		对称加密 : DES AES
+		非对称加密 : RSA DSA
+		Hash 散列技术,用于信息摘要 : MD5 SHA		//对内容的检测
+2 GPG 加/解密工具
+	2.1 GnuPG 简介
+			GnuPG是非常流行的加密软件，支持所有常见加密算法，并且开源免费使用。
+		~]# yum -y install gnupg2   //安装软件
+		~]# gpg --version   //查看版本
+	2.2 GPG 对称加/解密
+		基本用法 :  --symmetric 或 -c      --decrypt 或  -d
+			~]# gpg -c 文件	//加密后生成 *.gpg 文件
+			~]# gpg -d 文件	//解密  直接输出到屏幕
+			~]# gpg -d file2.txt.gpg > file2.txt  //解密后保存
+	2.3 GPG 非对称加/解密
+		发送方加密(公钥)------->接收方解密(私钥)
+		前期准备
+			1 创建密钥对 		
+				创建的密钥对存放在 ~/.gnupg/ 目录下
+				 ~]# gpg --gen-key	//创建密钥对
+			2 导出公钥
+				~]# gpg --list-keys    //查看公钥环
+				~]# gpg -a --export 真实姓名 > UserA.pub
+		//--export 导出秘钥  -a 导出的秘钥存储为ASCII格式
+				将其传给其他用户用来加密
+			3 导入接受的公钥
+				~]# gpg --import 公钥文件
+			4 加密文件
+				~]# gpg -e -r 真实姓名 文件
+			无论如何还是使用这把密钥吗？(y/N)y .......
+		//-e 选项是使用密钥加密数据  -r 选项后面跟的是密钥，说明使用哪个密钥对文件加密
+			5 解密文件
+				~]# gpg -d 加密文件 >  love.txt //输入到 love.txt 文件中
+3 GPG 签名机制 检查数据来源的正确性    //签名文件以  .sig 结尾
+		//需要把 源文件 公钥 签名文件 共享给用户才能验证数据的完整性
+	为软件包建立签名会文件
+		分离式签名 : --detach-sign 或 -b
+		~]# gpg -b 文件名    //创建分离式数字签名
+	验证软件包签名
+		验证签名 : --verify
+		~]# gpg --verify 签名文件 //验证数据完整性
+
+							入侵检测(AIDE)
+1 初始化系统
+	1.1 AIDE 简介 :
+		是一套入侵检测系统
+		Aide通过检查数据文件的权限、时间、大小、哈希值等，校验数据的完整性。
+		使用Aide需要在数据没有被破坏前，对数据完成初始化校验，生成校验数据库文件，在被攻击后，可以使用数据库文件，快速定位被人篡改的文件。
+	1.2 安装软件包
+		]# yum -y install aide
+	        //配置文件
+		~]# vim /etc/aide.conf
+		......
+		//@@define 定义变量格式
+		@@define DBDIR /var/lib/aide   //数据库目录
+		@@define LOGDIR /var/log/aide   //日志目录
+		database_out=file:@@{DBDIR}/aide.db.new.gz //定义初始化数据的文件名
+		//一下内容为可以检查的项目（权限，用户，组，大小，哈希值等）
+		#p:      permissions
+		#i:      inode:
+		#n:      number of links
+		#u:      user
+		#g:      group
+		#s:      size
+		#md5:    md5 checksum
+		#sha1:   sha1 checksum
+		#sha256:        sha256 checksum
+		DATAONLY =  p+n+u+g+s+acl+selinux+xattrs+sha256  //检测集合
+		//以下内容设置需要对哪些数据进行入侵校验检查
+		//注意：为了校验的效率，这里将所有默认的校验目录与文件都注释
+		//仅保留/root目录，其他目录都注释掉
+		/root   DATAONLY
+		#/boot   NORMAL      //对哪些目录进行什么校验
+		#!/usr/src            //使用[!]，设置不校验的目录
+	3 初始化检查 ,入侵前做
+		在没有被攻击入侵前
+		根据配置文件,对数据进行校验操作
+		~]# aide --init
+	4 备份数据库 
+		再被入侵前,将校验的数据库文件备份到安全的地方
+		如 优盘,光盘,移动硬盘,网络存储
+		~]# cp /var/lib/aide/aide.db.new.gz  /media/  //拷贝到其他设备
+		~]# mv aide.db.new.gz aide.db.gz //修改为配置文件 读入的文件名
+	5 入侵检测
+		 ~]# aide --check //检查哪些数据发生了变化
+
+
+							扫描与抓包
+						      1 安全分析概述
+1.1 为什么需要扫描
+	以获取一些公开/非公开信息为目的
+		检测潜在的风险
+		查找可攻击目标
+		收集设备/主机/系统/软件信息
+		发现可利用的安全漏洞
+1.2 扫描方式及工具
+	典型的扫描方式 (图形)
+	Scan	主动探测
+	Sniff	被动监听/ 嗅探
+	Capture	数据包捕获
+	常见的安全分析工具	 (命令行下)
+	扫描器 : NMAP   
+	协议分析 : tcpdump WireShark	
+									 2 NMAP
+
+
+2.1 NAMP 
+	一款强大的网络探测利器工具
+	支持多种探测技术
+	---ping 扫描
+	---duo端口扫描
+	---TCP/IP指纹校验
+2.2 NAMP简介
+	基本用法
+		~]# namp [扫描类型] [选项] <扫描目标....>  //不加类型 选项 默认扫描目标主机使用的 TCP 协议的服务
+	常用的扫描类型
+		-- -sS TCP SYN 扫描(半开)	//三次握手有两次
+		-- -sT TCO 连接扫描(全开)	 	//三次握手有三次
+		-- -sU UDP 扫描
+		-- -sP ICMP扫描
+		-- -A  目标系统全面扫描
+	]# nmap  目标主机        //扫描使用的 TCP 协议的服
+	]# nmap -sP  172.40.58.0/24
+	]# nmap -A  目标主机	
+	]# nmap -p 端口 目标主机		//指定服务
+	]# nmap  -p 6351,3306 目标主机  //多个服务
+	]# nmap -n  -p 6351,3306  192.168.4.51   //(-n) 加快速度 不做dns解析
+	]# nmap -n  -p 6351,3306  192.168.4.51-53   //连续主机
+	]# nmap -n  -p 6351,3306  192.168.4.51,56,53	//不连续多个主机
+			  
+						      3 网络抓包工具	
+1 tcpdump 抓包命令
+	基本用法 :
+		]# tcpdump [选项]  过滤条件
+	监控选项如下：
+		// -i，指定监控的网络接口（默认监听第一个网卡）
+		// -A，转换为 ACSII 码，以方便阅读
+		// -w，将数据包信息保存到指定文件
+		// -r，从指定文件读取数据包信息
+		// -c , 定义抓包个数
+	tcpdump的过滤条件：
+		// 类型：host、net、port、portrange
+		// 方向：src、dst
+		// 协议：tcp、udp、ip、wlan、arp、……
+		// 多个条件组合：and、or、not
+		//只有包到达主机或者经过才能抓取到包
+	//(源地址 >  目标地址)
+	]# tcpdump   //不加选项默认抓取所有的包
+	]# tcpdump -c 2 -w file2.cap -i eth0
+	]# tcpdump -i eth0 -c 4 icmp and host 192.168.4.254 //
+	]# tcpdump -i eth0 -c 4 icmp and src host 192.168.4.254 //源地址是 192.168.4.254
+	]# tcpdump -A dst host 192.168.4.5 and tcp port 110  
+	]# tcpdump -A -r file2.cap  //分析抓取结果
+	]# tcpdump -A -w ftp.cap  //抓包并保存
+	]# tcpdump -i br1 icmp and host 172.40.58.69 or host 172.40.58.79 //抓取 icmp(ping) 的包 并且源地址是 69   或者源地址是 79 的所有包
+	]# tcpdump -i br1 icmp and \( host 172.40.58.69 or host 172.40.58.79 \) //抓取 icmp(ping) 的包 并且源地址是 69 或 79
+
+2 WireShark 协议分析器
+	需要图形环境
+	wireshark
+	wireshark-gnome
+
+
+
+
+								系统审计
+1 概述
+	什么是审计
+		基于事先配置的规则生成日志,记录可能发生在系统上的事件
+		审计不会为系统提供额外的安全保护,但他会发现并记录违反安全策略的人及其行为
+	审计能够就的日志内容
+		日期与事件,事件结果	
+		触发事件的用户
+		所有认证机制的使用者都可以被记录 ,如 ssh 等
+		对关键数据文件的修改行为等
+	审计案例
+		监控文件访问
+		监控系统调用
+		记录用户运行的命令
+		审计可以监控网络访问行为
+		ausearch 工具 可以根据条件过滤审计日志
+		ausearch 工具 可以生成审计报告
+2 配置审计
+	部署 audit .//不可停止服务
+		]# yum -y install audit
+		]# cat /etc/audit/audit.log
+	auditctl 命令
+		]# auditctl -s		//查询状态
+		]# auditctl -l		//查看规则
+		]# auditctl -D		//删除所有规则
+	定义临时规则 //立即生效
+		定义语法
+			auditctl  -w  path  -p  permission  -k  key_name
+			// path为需要审计的文件或目录   (也可以是个命令)
+			//  权限可以是r,w,x, a(文件或目录的属性发生变化)
+			// Key_name为可选项，方便识别哪些规则生成特定的日志项
+
+		]# auditctl  -w  /etc/passwd  -p wa  -k  passwd_change   //设置规则所有对passwd文件的写、属性修改操作都会被记录审计日志
+		]# auditctl  -w  /etc/selinux/  -p wa  -k  selinux_change  //设置规则，监控/etc/selinux目录
+		]# auditctl  -w  /usr/sbin/fdisk  -p x  -k  disk_partition//设置规则，监控fdisk程序
+		]# auditclt  -w  /etc/ssh/sshd_conf  -p warx  -k  sshd_config //设置规则，监控sshd_conf文件
+		
+		]# auditctl  -l    //查看规则
+		-w /etc/passwd -p wa -k passwd_change
+		-w /etc/selinux -p wa -k selinux_change
+		-w /usr/sbin/fdisk -p x -k disk_partition
+		]# vim  /etc/audit/rules.d/audit.rules   ///写进配置文件 永久有效
+		-w /etc/passwd -p wa -k passwd_changes
+		-w /usr/sbin/fdisk -p x -k partition_disks
+3 审计日志
+	查看日志
+		]# tailf  /var/log/audit/audit.log
+			type=SYSCALL msg=audit(1517557590.644:229228): arch=c000003e 
+			syscall=2 success=yes exit=3 
+			a0=7fff71721839 a1=0 a2=1fffffffffff0000 a3=7fff717204c0 
+			items=1 ppid=7654 pid=7808 auid=0 uid=0 gid=0 euid=0 suid=0 
+			fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts2 ses=3 comm="cat" 
+			exe="/usr/bin/cat" 
+			subj=unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023 key="sshd_config"
+			.. ..
+			#内容分析
+			# type为类型
+			# msg为(time_stamp:ID)，时间是date +%s（1970-1-1至今的秒数）
+			# arch=c000003e，代表x86_64（16进制）
+			# success=yes/no，事件是否成功
+			# a0-a3是程序调用时前4个参数，16进制编码了
+			# ppid父进程ID，如bash，pid进程ID，如cat命令
+			# auid是审核用户的id，su - test, 依然可以追踪su前的账户
+			# uid，gid用户与组
+			# tty:从哪个终端执行的命令
+			# comm="cat"            用户在命令行执行的指令
+			# exe="/bin/cat"        实际程序的路径
+			# key="sshd_config"    管理员定义的策略关键字key
+			# type=CWD        用来记录当前工作目录
+			# cwd="/home/username"
+			# type=PATH
+			# ouid(owner's user id）    对象所有者id
+			# guid(owner's groupid）    对象所有者id
+	通过工具搜索日志
+		系统提供的ausearch命令可以方便的搜索特定日志，默认该程序会搜索/var/log/audit/audit.log，ausearch options -if file_name可以指定文件名
+		]# ausearch -k sshd_config -i   //根据key搜索日志，-i选项表示以交互式方式操作
+		]# aureport   //查看日志信息
+
+							服务与安全
+1 Nginx 安全
+	删除不需要的模块(Nginx是模块化设计)	
+		需要的模块使用--with加载
+		不需要的用--without禁用
+		//最小化安转永远是对的!!
+		关闭自动索引功能
+		]# ./configure --without-http_autoindex_module //为网页内容添加保密性
+	修改版本信息，并隐藏具体的版本号
+		]# vim /usr/local/nginx/conf/nginx.conf
+		.......
+		http{
+		     server_tokens off;  //在http下面手动添加这么一行
+		]# curl -I http://192.168.4.5   //查看服务器响应的头部信息
+	//但服务器还是显示了使用的软件为nginx，通过如下方法可以修改该信息。
+		]# vim +48 src/http/ngx_http_header_filter_module.c
+		//注意：vim这条命令必须在nginx-1.12源码包目录下执行！！！！！！
+			static u_char ngx_http_server_string[] = "Server: nginx" CRLF;  //软件名称
+			static u_char ngx_http_server_full_string[] = "Server: " NGINX_VER CRLF; //软件版本
+			static u_char ngx_http_server_build_string[] = "Server: " NGINX_VER_BUILD CRLF;  //编译时间
+		//修改后的效果
+			static u_char ngx_http_server_string[] = "Server: Jacob" CRLF;
+			static u_char ngx_http_server_full_string[] = "Server: Jacob" CRLF;
+			static u_char ngx_http_server_build_string[] = "Server: Jacob" CRLF;
+		//修改完成后，再去编译安装Nignx，版本信息将不再显示为Nginx，而是Jacob
+		]# ./configure
+		]# make && make install
+		]# killall nginx
+		]# /usr/local/nginx/sbin/nginx    //启动服务
+		]# curl -I http://192.168.4.5     //查看版本信息验证   -i 显示报文信息
+	限制并发量
+		//DDOS攻击者会发送大量的并发连接，占用服务器资源（包括连接数、带宽等），这样会导致正常用户处于等待或无法访问服务器的状态 ,Nginx提供了一个 ngx_http_limit_req_module 模块，可以有效降低DDOS攻击的风险  限制一台主机的访问次数
+		]# vim /usr/local/nginx/conf/nginx.conf
+		… …
+		http{
+		… …
+		limit_req_zone $binary_remote_addr zone=one:10m rate=1r/s;
+		    server {
+			listen 80;
+			server_name localhost;
+			limit_req zone=one burst=5;  //调用哪个区域存储IP
+			    }
+		}
+		//备注说明：
+		//limit_req_zone语法格式如下：
+		//limit_req_zone key zone=name:size rate=rate;
+		//limit_req_zone    定义内存区域 存放内置变量访问主机的 IP 地址
+		//$binary_remote_addr		内置变量 记录访问主机的 IP 地址
+		//上面案例中是将客户端IP信息存储名称为one的共享内存，内存空间为10M
+		//1M可以存储8千个IP信息，10M可以存储8万个主机连接的状态，容量可以根据需要任意调整
+		//每秒中仅接受1个请求，多余的放入漏斗
+		//漏斗超过5个则报错
+	拒绝非法访问 (常见 HTTP 请求访问)
+		HTTP 定义了很多方法，可以让用户连接服务器，获得需要的资源。但实际应用中一般仅需要get和post
+		GET 请求指定的页面信息 ,并返回实体主体
+		HEAD 类似于 get 请求 只不过返回的响应中没有具体的内容 , 用于获取报头
+		POST 向指定资源提交数据进行处理请求 (例如提交表单或者上传文件)
+		DELETE 请求服务器删除指定的页面
+		PUT 向服务器特定位置上穿资料
+
+		未修改服务器配置前，客户端使用不同请求方法测试
+		]# curl -i -X HEAD http://192.168.4.5            //正常
+		//curl命令选项说明：
+		//-i选项：访问服务器页面时，显示HTTP的头部信息
+		//-X选项：指定请求服务器的方法
+		]# vim /usr/local/nginx/conf/nginx.conf
+			http{
+			       server {
+					 listen 80;
+			#这里，!符号表示对正则取反，~符号是正则匹配符号
+			#如果用户使用非GET或POST方法访问网站，则retrun返回444的错误信息
+				      if ($request_method !~ ^(GET|POST)$ ) {
+				       }    
+				}
+			}
+	防止buffer溢出
+		//当客户端连接服务器时，服务器会启用各种缓存，用来存放连接的状态信息。如果攻击者发送大量的连接请求，而服务器不对缓存做限制的话，内存数据就有可能溢出（空间不足）修改Nginx配置文件，调整各种buffer参数，可以有效降低溢出风险。	
+		]# vim /usr/local/nginx/conf/nginx.conf
+		http{
+		client_body_buffer_size  1K;
+		client_header_buffer_size 1k;
+		client_max_body_size 1k;
+		large_client_header_buffers 2 1k;
+		 … …
+		}
+
+2 数据库安全
+	初始化安全脚本
+	~]# mysql_secure_installation   //初始化脚本
+		//配置 root 密码
+		//删除匿名账户
+		//禁止 root 远程登录
+		//删除测试数据库
+		//刷新权限
+
+	修改密码
+	~]# mysqladmin -uroot -predhat password 'mysql' //修改密码，旧密码为redhat，新密码为mysql
+	MariaDB [(none)]>set password for root@'localhost'=password('redhat');//使用账户登录数据库，修改密码 
+	mysql> update mysql.user  set password=password("123456") where host="localhost" and user="root"; flush privileges ;
+
+	~]# cat .bash_history   //命令行下的历史
+	~]# /root/.bash_history //shell 下执行的历史命令
+	~]# grep 1000 /etc/profile  //限制命令行下历史命令存在的条数
+		HISTSIZE=1000
+	mysqladmin -uroot -pxxx password 'redhat' //通过命令行修改的密码，bash会自动记录历史，历史记录中记录了明文密码
+
+	~]# cat .mysql_history  //mysql 下执行的历史命令
+	set password for root@'localhost'=password('redhat');
+	select user,host,password from mysql.user;
+	flush privileges; //通过mysql命令修改的密码，mysql也会有所有操作指令的记录，这里也记录了明文密码
+
+//	另外数据库还有一个binlog日志里也有明文密码 (5.6后修复) 管理好自己的历史，不使用明文登录，选择合适的版本5.6以后的版本，日志，行为审计（找到行为人），使用防火墙从TCP层设置ACL（禁止外网接触数据库）。主机远程登录时 tcpdump 抓包可以抓到明文密码  可用 ssl 或 ssh 加密传输数据
+		
+3 Tomcat安全
+	隐藏版本信息
+		]# curl -I http://192.168.2.100:8080/xx  访问不存在的页面文件，查看头部信息
+		~]# curl -I http://192.168.2.100:8080  访问存在的页面文件，查看头部信息
+		~]# curl http://192.168.2.100:8080/xx  访问不存在的页面文件，查看错误信息
+
+		~]# vim +69 /usr/local/tomcat/lib/org/apache/catalina/util/ServerInfo.properties 
+	]# vim /usr/local/tomcat/conf/server.xml
+	<Connector port="8080" protocol="HTTP/1.1"
+	connectionTimeout="20000"  redirectPort="8443" server="jacob" />
+
+	降级启动
+		默认tomcat使用系统高级管理员账户root启动服务，启动服务尽量使用普通用户	
+		]# chown -R tomcat:tomcat /usr/local/tomcat/ //修改tomcat目录的权限，让tomcat账户对该目录有操作权限
+		~]# su -c /usr/local/tomcat/bin/startup.sh tomcat //使用su命令切换为tomcat账户，以tomcat账户的身份启动tomcat服务
+		~]# chmod +x /etc/rc.local   //该文件为开机启动文件
+		~]# vim /etc/rc.local  //修改文件，添加如下内容
+		su -c /usr/local/tomcat/bin/startup.sh tomcat
+
+
+								Linux 安全之打补丁
+
+1 补丁原理
+	用来升级最新版本
+	常用命令 diff  
+	1.1 diff 原则 :
+		------告诉我们怎么修改第一个文件后能得到第二个文件
+		选项 :
+			-u	//输出统一内容的头部信息(打补丁使用 ,生成补丁文件)
+			-r	//递归对比目录中的所有资源(可以对比目录)
+			-a	//所有文件视为文本(包括二进制程序)
+			-N	//无文件视为空文件
+	1.2 diff 文件对比
+		1.2-1 仅对文件对比
+			~]# diff -u 旧文件  新文件   > 补丁文件
+		1.2-2 对目录对比
+			~]# diff -rauN 旧文件  新文件  >  补丁文件
+2 patch 打补丁
+	~]# patch -p(数值) < 补丁文件
+	~]# patch -p0 < test.patch     
+		//patch -pnum（其中num为数字，指定删除补丁文件中多少层路径前缀）
+		//如原始路径为/u/howard/src/blurfl/blurfl.c
+		//-p0则整个路径不变
+		//-p1则修改路径为u/howard/src/blurfl/blurfl.c
+		//-p4则修改路径为blurfl/blurfl.c
+		//-R(reverse)反向修复，-E修复后如果文件为空，则删除该文件
+	]# patch -RE < test.patch   //还原旧版本，反向修复
+
+##########################################################################
+
+							包过滤防火墙 iptables (网络层)
+1 概述 (严格区分大小写)
+	iptables表,链结构 (四表五链)   表是功能 , 链是IP包传输的方向
+		规则链内的匹配顺序
+		匹配即停止
+		若无任何匹配 , 则按照该链的默认策略处理
+	filter	表    数据包过滤 进来的 出去的 经过的 数据包
+	nat		表	地址转换   OUTPUT   PREROUTING   POSTROUTING
+	mangle	表	包标记    可以处五条链
+	raw 	表	状态跟踪	 只能处理 PREROUTING  OUTPUT
+	INPUT	链	处理进入防火墙主机的包
+	OUTPUT	链	处理从防火墙主机的出去包
+	FORWAR	链	处理经过防火墙主机的包
+	PREROUTING	链	路由前处理
+	POSTROUTING	链	路由后处理
+2 iptables 用法解析
+	iptables 基本用法
+		~]# iptables [-t 表名] 选项  [链名]  [条件]  [-j 目标操作]
+ 		可以不指定表 , 默认为 filter 表
+		可以不指定链 , 默认为对应表的所有链
+		如果没有匹配的规则 , 则使用防火墙默认规则
+		选项/链名/目标操作 用大写字母 , 其余都小写
+	基本的操作目标
+		ACCEPT : 允许通过/放行
+		DROP : 直接丢弃 , 不给出任何回应
+		REJECT : 拒绝通过 , 必要时会给出提示
+		LOG : 记录日志 , 然后传给下一条规则		//"匹配即停止" 规律的唯一例外
+	管理选项
+		-A		在链的末尾追加一条规则
+		-I		在链的开头插入一条规则
+		-L		列出所有的规则条目
+		-n		以数字形式显示地址 , 端口信息
+		--line-numbers		查看规则时 , 显示规则的序号
+		-D		删除链内指定序号的一条规则
+		-F		清空所有的规则
+		-P		为指定的链名设置默认规则
+		iptables -t -F
+		iptables -t nat -F
+		iptables -t mangle -F
+		iptables -t raw -F
+		iptables-save > /etc/sysconfig/iptables  //保存操作
+		iptables -t filter  -nL --line-numbers
+		iptables -t nat  -nL --line-numbers
+		iptables -t mangle  -nL --line-numbers
+		iptables -t raw  -nL --line-numbers
+
+3 filter 表控制
+	开启主机路由转发功能
+		~]# echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf  或
+		~]# echo 1 > /proc/sys/net/ipv4/ip_forward
+	基本匹配条件   (取反用  叹号   ! )
+		通用匹配
+			可直接使用 , 不依赖于其他条件或扩展
+			包括网络协议 , IP地址 , 网络接口等条件
+		隐含匹配
+			要求以特定的协议匹配作为前提
+			包括端口 , TCP标记 , ICMP类型等条件
+		协议匹配		-p	协议名
+		地址匹配		-s  源地址    -d  目标地址
+		接口匹配		-i	收数据的网卡		-o  发数据的网卡
+		端口匹配		--sport	源端口	--dport  目标端口
+		ICMP 类型匹配	--icmp-type		ICMP
+	iptables -t filter -I INPUT -p tcp  --dport 80 -j ACCEPT
+	iptables-save > /etc/sysconfig/iptables
+	iptables -t filter -A INPUT -p  icmp -j ACCEPT
+	iptables -t filter -nL --line-numbers
+	iptables-save > /etc/sysconfig/iptables
+	B 主机可以ping 其他主机 但其他主ping 不通B 主机
+	]# iptables -t filter -D INPUT 3
+	]# iptables -t filter -A INPUT -p icmp --icmp-type  echo-reply  -j ACCEPT
+	]# iptables-save > /etc/sysconfig/iptables
+	]# iptables -t filter -P FORWARD DROP
+	]# iptables -t filter -A FORWARD -p icmp -j ACCEPT
+	]# iptables -t filter -A FORWARD -p tcp --dport 80 -j ACCEPT
+	]# iptables -t filter -A FORWARD -p tcp --sport 80 -j ACCEPT
+	]# iptables -t filter -A FORWARD -p tcp  --dport 22  -j ACCEPT
+	]# iptables -t filter -A FORWARD -p tcp  --sport 22  -j ACCEPT
+	]# iptables-save > /etc/sysconfig/iptables
+4 扩展匹配
+	基本用法  ,前提要有防火墙模块支持
+		-m 扩展模块 --扩展条件 条件值
+	常见类型
+		MAC 地址匹配 	-m mac --mac-source MAC地址
+		多端口			-m multiport --sports 源端口列表
+						-m  multiport --dports  目标端口
+		IP 范围匹配		-m iprange --src-range IP地址
+						-m iprange  --dst-range IP地址
+	]# iptables -t filter -A FORWARD -p tcp -m multiport --dports 22,80 -j ACCEPT
+	]# iptables -t filter -A FORWARD -p tcp -m multiport --sports 22,80 -j ACCEPT
+	]# iptables -t filter -D FORWARD 2 
+	]# iptables -t filter -D FORWARD 2 
+	]# iptables -t filter -D FORWARD 2 
+	]# iptables -t filter -D FORWARD 2 
+	]# iptables -t filter -D FORWARD 1
+	]# iptables -t filter -A FORWARD -p icmp -m iprange --src-range 192.168.4.90-192.168.4.95 -j ACCEPT
+	]# iptables -t filter -A FORWARD -p icmp -m iprange --dst-range 192.168.4.90-192.168.4.95 -j ACCEPT
+	]# iptables -t filter -I FORWARD 3 -p icmp -m mac --mac-source 52:54:00:ca:43:ab -j DROP
+
+5 nat 表应用
+	 SNAT 源地址 转换
+		修改数据包的源地址
+		仅用于 nat 表的POSTROUTING
+	~]# iptables -t nat -A POSTROUTING -s 192.168.2.0/24 -p tcp --dport 80  -j SNAT --to-source 192.168.4.92
+或
+	~]# iptables -t nat -A POSTROUTING -s  192.168.2.0/24  -o eth0  -j  MASQUERADE
+	~]# iptables -t nat -nL POSTROUTING
+	~]# iptables-save > /etc/sysconfig/iptables
+
+
+
+
+	
+							项目
+项目介绍：
+
+
++++++project2_day02
+
+ http://192.168.4.33/a.html
+
+
+
+加快网站的访问速度：把网站经常被访问的数据，存储到内存服务器里
+
+redis集群 6台redis服务器 192.168.4.51~54/56/58 
+
+分布式内存存储服务 同时能够实现服务的高可用和数据的自动备份，同时支持数据永久存储
+
+分布式内存存储服务（redis集群） 6台redis服务器
+192.168.4.51：6379
+192.168.4.52：6379
+192.168.4.53：6379
+192.168.4.54：6379
+192.168.4.56：6379
+192.168.4.58：6379
+redis集群管理主机 1台    192.168.4.57
+
+步骤如下：
+	1 分别在6台服务器上安装源码的redis软件 并做初始化配置
+	2 停止运行的redis服务，修改配置文件启用集群功能，启动服务、查看端口
+[root@localhost ~]# vim /etc/redis/6379.conf 
+[root@localhost ~]# 
+[root@localhost ~]# 
+[root@localhost ~]# sed -n '70p;815p;823p;829p' /etc/redis/6379.conf 
+bind 192.168.4.58
+cluster-enabled yes
+cluster-config-file nodes-6379.conf
+cluster-node-timeout 5000
+[root@localhost ~]# 
+[root@localhost ~]# /etc/init.d/redis_6379 start
+Starting Redis server...
+[root@localhost ~]# 
+[root@localhost ~]# netstat -utnlp  | grep  redis-server
+tcp        0      0 192.168.4.58:6379       0.0.0.0:*               LISTEN      4507/redis-server 1 
+tcp        0      0 192.168.4.58:16379      0.0.0.0:*               LISTEN      4507/redis-server 1 
+[root@localhost ~]# redis-cli  -h 192.168.4.58 
+192.168.4.58:6379> keys *
+(empty list or set)
+192.168.4.58:6379> CLUSTER info
+cluster_state:fail
+cluster_slots_assigned:0
+cluster_slots_ok:0
+cluster_slots_pfail:0
+cluster_slots_fail:0
+cluster_known_nodes:1
+cluster_size:0
+cluster_current_epoch:0
+cluster_my_epoch:0
+cluster_stats_messages_sent:0
+cluster_stats_messages_received:0
+192.168.4.58:6379> 
+192.168.4.58:6379> CLUSTER nodes
+cec394e8daedf8be012f8c838a351f2575ec7ad5 :6379@16379 myself,master - 0 0 0 connected
+192.168.4.58:6379>exit
+
+	3 在管理主机57 上部署ruby脚本运行环境、创建管理集群的脚本、查看脚本帮助信息
+	  时间12 分钟到 10：30 
+
+	4 在管理主机57上;创建集群并查看集群信息  时间10分钟 到  10：46 
+
+]# redis-trib.rb create --replicas 1  192.168.4.51:6379 192.168.4.52:6379 192.168.4.53:6379 192.168.4.54:6379 192.168.4.56:6379 192.168.4.58:6379
+
+]# redis-trib.rb info  192.168.4.51:6379
+]# redis-trib.rb check  192.168.4.51:6379
+
+
+	5 在客户端主机访问集群执行存取数据的操作
+]# redis-cli  -c  -h 192.168.4.56 
+> set school tarena
+> set class  nsd1905
+> set age  19
+> set name  bob
+> keys *
+> exit
+
+	配置PHP支持连接redis集群
+		升级网站运行平台为LNMP 
+
+			删除httpd的配置 
+[root@33 ~]# systemctl  stop httpd
+[root@33 ~]# 
+[root@33 ~]# systemctl  disable httpd
+Removed symlink /etc/systemd/system/multi-user.target.wants/httpd.service.
+[root@33 ~]# 
+[root@33 ~]# umount /var/www/html/
+[root@33 ~]# 
+[root@33 ~]# vim /etc/fstab 
+[root@33 ~]# tail -1  /etc/fstab 
+#192.168.4.30:/yang /var/www/html nfs _netdev 0 0
+[root@33 ~]# 
+
+	 部署LNMP环境	(2台 网站服务器都要配置)
+		安装源码nginx软件
+		安装php-fpm软件
+		安装mariadb-server 、 mariadb-devel 软件
+		安装php php-mysql  php-devel 软件
+		把NFS服务的共享目录挂载到网页目录/usr/local/nginx/html下
+		启动nginx服务 
+		启动php-fpm服务
+
+	 测试LNMP环境   
+		[root@33 ~]# vim /usr/local/nginx/html/a2.php
+		<?php
+			$school="tarena";
+			echo $school;
+		?>
+
+		:wq
+
+[student@room9pc01 ~]$ curl  http://192.168.4.44/a2.php
+tarena 
+
+[student@room9pc01 ~]$ curl  http://192.168.4.33/a2.php
+tarena
+
+
+	 配置PHP支持连接redis集群(33/44)  15分钟 到 14：30
+]# rpm -q gcc  php-devel
+]# tar -zxvf redis-cluster-4.3.0.tgz 
+]# cd redis-4.3.0/
+]# phpize
+]# ./configure --with-php-config=/usr/bin/php-config
+]# make
+]# make install 
+]# ls  /usr/lib64/php/modules/
+]# vim /etc/php.ini
+
+]# sed -n '728p;730p'  /etc/php.ini 
+	extension_dir = "/usr/lib64/php/modules/"
+        extension = "redis.so"
+
+]# systemctl  restart php-fpm
+]# php -m | grep -i redis
+
+	 编写php脚本连接集群存取数据
+	 客户端访问网站脚本存取数据
+
+
+
+PXC集群  3台linux系统服务器 192.168.4.71～73
+	   1  在3台服务器192.168.4.71～73上，安装pxc软件
+	   2  修改3台服务器配置文件
+	   3  在任意1台服务器启动集群服务，并使用数据库管理员初始密码登陆、重置登陆密码、创建授权用户。
+	   4  在另外2台服务上，启动数据库服务，数据库管理员登陆，查看授权用户
+	   5  在3台主机分别查看集群信息 
+	
+	   时间10分钟 到 16：53
+[root@host72 ~]# mysql -uroot -p123456
+mysql> grant all on gamedb.* to  yaya99@"%"  identified by "123456";
+
+	   7  客户端使用授权用户 访问集群存/取数据
+[root@web33 ~]#
+   38  mysql -h192.168.4.71 -uyaya99 -p123456
+   39  mysql -h192.168.4.72 -uyaya99 -p123456
+   40  mysql -h192.168.4.73 -uyaya99 -p123456
+
+	休息到 17：05
+
+	   8  把mysql主从同步结构的数据迁移到PXC 集群上。
+		1 停止22从服务器的slave 进程  stop slave; 13：00
+		2 使用innobackupex 对22 做数据完全备份
+		3 把完全备份拷贝到PXC集群主机做数据恢复（innobackupex）
+		4 启动mysql数据库服务
+		5 查看slave 进程的状态
+		6 查看数据
+
+LB集群 (配置数据库服务负载均衡集群) 
+ 	ip地址 192.168.4.81 做调度器,把访问数据库服务的连接请求平均分发给71/72/73
+	1 安装haproxy软件
+	2 修改配置文件
+	3 启动服务
+	4 登陆管理页面，查看调度信息
+	5 测试配置
+
+HA集群 (配置调度器的高可用集群, vip 地址 192.168.4.250 )
+	准备备用调度器服务器 192.168.4.82 （配置与81一致)
+	1 在2台主机上安装keepalived软件
+	2 把主机81 配置为主服务器
+	3 把主机82 配置为备用服务器
+	4 启动服务
+时间8分钟 到 18：13 
+
+	5 查看vip地址
+	5 测试配置
+##############################################################################
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

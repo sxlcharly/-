@@ -1,0 +1,470 @@
+									NOSQL  (一)
+			1、数据库类型	
+关系型数据库管理系统		(RDBMS)
+非关系型数据库管理系统		(NOSQL)
+	RDBMS软件
+		mysql
+		mariadb
+		oracle
+		db2
+		sql server
+	NOSQL	(NOSQL = not only sql)
+		泛指非关系型数据库
+		不需要预先定义数据存储结构
+		每条记录可以有不同的数据类型和字段个数
+	主要软件
+		memcached
+		redis
+		mongodb
+		couchdb
+		neo4j
+		flockdb
+
+				2、部署Redis服务
+2.1、Redis介绍
+	Remote Distionary Server (远程字典服务器)
+	是一款高性能的(key/values) 分布式内存数据库
+	支持数据持久化(定期把内存里数据存储到硬盘)
+	支持多种数据类型string、list、hash..
+	支持master-slave 模式数据备份
+
+2.2、安装软件
+	]# yum -y install gcc 
+	]# tar -zxf redis-4.0.8.tar.gz
+	]# cd redis-4.0.8/
+	]# make
+	]# make install
+	]# cd utils/
+	]# ./install_server.sh		//初始化脚本
+Port           : 6379                   //端口号
+Config file    : /etc/redis/6379.conf         //配置文件目录
+Log file       : /var/log/redis_6379.log      //日志目录
+Data dir       : /var/lib/redis/6379          //数据库目录
+Executable     : /usr/local/bin/redis-server  //启动程序的目录
+Cli Executable : /usr/local/bin/redis-cli     //命令行的连接工具
+Is this ok? Then press ENTER to go on or Ctrl-C to abort.  //回车完成配置
+Copied /tmp/6379.conf => /etc/init.d/redis_6379    //服务启动脚本
+
+	]#  /etc/init.d/redis_6379 status		//查看服务状态
+	]# netstat -antupl |grep :6379 //查看端口
+	]# /etc/init.d/redis_6379 stop		//停止服务
+	]# /etc/init.d/redis_6379 start 	//开启服务
+	]# redis-cli  //默认连接127.0.0.1地址的 6379端口
+	127.0.0.1:6379> ping
+	PONG       //PONG说明服务正常
+	set keyname keyvalue //存储
+	get keyname //获取
+
+2.3、常用命令
+	set key名 key值		//存储一个key值
+	mset key名列表		//存储多个key值
+	get	key名			//获取key值
+	mget 		//获取多个key值
+	select 数据库编号0-15	//切换库
+	keys *		//显示所有key名
+	keys a?		//显示指定的key名
+	exists key名	//测试是否存在
+	ttl key		//查看生存时间
+	type key名		//查看类型
+	move key名 库编号		//移动到指定库
+	expire key 数字		//设置有效时间
+	persist key	//设置 key 永不过期
+	del key		//删除指定的key
+	flushall 	//删除内存里所有key
+	flushdb		//删除所在库所有key
+	save	//保存所有key到硬盘
+	shutdown	//停止服务
+
+				3、配置文件解析
+3.1、配置分类
+	NETWORK			网络
+	GENERAL			常规
+	SNAPSHOTTING	快照
+	REPLICATION		复制
+	SECURITY		安全
+	CLIENTS			客户端
+	MEMORY MANAGEMENT	内存管理
+
+3.2、常用配置
+	port 6379				//端口
+	bind 127.0.0.1			//IP地址
+	daemonize yes			//守护进程方式运行
+	databases 16			//数据库个数
+	logfile /var/log/redis_6379.log	//日志文件
+	maxclients 10000		并发连接数量
+	dir /var/lib/redis/6379	//数据库目录
+
+3.3、内存管理		(内存清除策略)
+	volatile-lru	//清除最少使用的(针对设置了TTL的key)
+	allkeys-lru		//删除最少使用的key
+	allkeys-lru		//从所有key中清除使用频率最少的key
+	volatile-lru	//从所有配置了过期时间的key中清除使用频率最少的key
+	volatile-random	//在设置了TTL的key里随机移除
+	allkeys-random	//随机移除key
+	volatile-ttl	//使出最近过期的key
+	noevication		//不删除,写满时报错
+3.4、优化管理
+	maxmemory			//最大内存
+	maxmemory-policy	//定义适用策略
+	maxmenmory-samples	//选取key模板的个数(针对lru和ttl策略)
+
+3.4、连接密码
+	]# vim /etc/redis/6379.conf
+	...
+	bind 192.168.4.50                //设置服务使用的ip
+	port 6350                            //更改端口号
+	requirepass 123456                //设置密码
+3.5、启动服务
+	]# /etc/init.d/redis_6379  start
+	]# netstat -utnlp  | grep redis-server
+	]# redis-cli -h 192.168.4.50 -p 6350 -a 123456 //访问服务
+3.6、停止服务
+	]# /etc/init.d/redis_6379 stop
+	]# redis-cli -h 192.168.4.50 -p 6350 -a 123456 shutdown
+
+						4、LNMP+Redis
+4.1、部署LNMP环境
+	安装nginx 依赖包  gcc pcre-devel zlib-devel 
+	]#yum -y install php-fpm  //安装php-fpm
+	]# yum -y install php php-devel automake autoconf //安装redis依赖
+	
+	]# tar -zxf php-redis-2.2.4.tar.gz //安装扩展包
+	]# cd phpredis-2.2.4/
+	]# phpize    //生成配置文件php-config及 configure命令
+	]# ./configure  --with-php-config=/usr/bin/php-config //配置
+	]# make //编译
+	]# make install //安装
+
+	]#vim /etc/php.ini  //修改php.ini文件  //添加模块
+	728 extension_dir = "/usr/lib64/php/modules/"  //模块文件目录
+	730 extension = "redis.so"  //模块文件名
+	]# php -m | grep  -i redis     //查看已加载的模块
+
+4.2、测试配置
+   编写网站脚本
+	]# vim  /usr/local/nginx/html/linkredis.php
+	<?php
+	$redis = new redis();
+	$redis->connect("192.168.4.50","6350");
+	$redis->auth("123456");			//密码
+	$redis->set("linux","redhat");	//key  与    值
+	echo $redis->get("linux");   //输出key
+	?>
+
+	]#curl  http://localhost/linkredis.php      //访问nginx服务
+   在192.168.4.50 服务器，查看数据
+	]# redis-cli -h 192.168.4.50 -p 6350 -a 123456 //连接redis服务
+	192.168.4.50:6350> keys *   //查看变量
+	1) "linux"
+	192.168.4.50:6350> 
+	192.168.4.50:6350> get linux //获取值
+	"redhat"
+	192.168.4.50:6350> 
+
+
+############################################################################
+							(二)Redis集群
+
+1、工作原理
+	存入的数据经过CRC16算法,得出数据的hash值,然后对16383取余,根据取余的值确定在那个slot	范围内,然后存入相应的库中
+2、部署管理主机
+	2.1、部署ruby脚本运行环境
+		]#yum -y install ruby 
+		]# which gem		//查看gem命令
+		]# gem install redis-3.2.1.gem	//安装解释器
+		]# mkdir  /root/bin     //创建命令检索目录
+		]# tar -xf redis-4.0.8.tar.gz
+		]# cd redis-4.0.8/src
+		]#cp  redis-trib.rb   /root/bin/ //创建管理集群脚本
+		]# chmod +x /root/bin/redis-trib.rb  //添加执行权限
+		]#redis-trib.rb   help  //查看命令帮助 需要执行权限
+	2.2、redis-trib脚本
+		--用法
+		   redis-trib.rb <command> <options><arguments...>
+							命令   		选项			参数		
+		create			创建集群
+		check			检查集群
+		info			查看集群信息
+		reshard			重新分片
+		del-node		删除主机
+		add-node --slave	添加 slave 主机
+		add-node		添加 master 主机
+		rebalance		平均分配hash slots
+
+3、创建集群
+	3.1、启动服务器集群功能  (在每台服务器上修改)
+		]# /etc/init.d/redis_6379 stop //停止redis服务
+		]# vim /etc/redis/6379.conf //修改配置文件
+		70 bind 192.168.4.51        //修改ip
+		93 port 6351        //修改端口（可选配置）
+		815 cluster-enabled yes     //启用集群功能
+		823 cluster-config-file nodes-6379.conf //存储集群信息的配置文件
+		829 cluster-node-timeout 5000        //集群节点通信超时时间
+		]# rm  -rf  /var/lib/redis/6379/  //清除6379下所有文件
+	3.2、管理主机创建集群
+		]# redis-trib.rb create --replicas 1 IP:端口 IP:端口 ..... //create --replicas定义每台主库从库个数
+		[OK] All 16384 slots covered.  //提示16384个槽分配完毕
+4、查看集群信息  (集群端口默认服务端口+10000)
+	]# redis-trib.rb info IP地址:端口 //查看集群信息
+	]# redis-trib.rb check IP地址:端口 //检测集群
+	]# redis-cli  -h IP地址 -p 端口
+	192.168.4.51:6351> cluster info       //查看集群信息
+
+5、访问集群
+	]# redis-cli  -c  -h IP地址 -p 端口//连接服务器      选项(-c) 表示进入集群模式
+6、测试集群功能
+	停止 master 的 redis 服务   //master宕机后对应的从服务自动选举为主服务, 原主机其发动后 会自动配置为当前 master 的 slave
+
+7、添加 master服务器
+	部署redis服务器, 并启用集群配置, 添加时不指定主机角色,默认新主机被选为 master ,添加 mster 主机需手动分配hash槽
+	]# redis-trib.rb add-node 192.168.4.58:6358 192.168.4.53:6353//执行添加命令
+	[OK] New node added correctly. //提示添加完成
+	7.1、在管理主机操作
+	]# redis-trib.rb info 192.168.4.53:6353  //查看集群信息 
+	]# redis-trib.rb check 192.168.4.53:6353    //检测集群
+
+		重新分片(三步走)
+	移出hash槽个数
+	接受hash槽主机ID
+	移除hash槽主机ID
+
+	]# redis-trib.rb  reshard   192.168.4.53:6353  
+	How many slots do you want to move (from 1 to 16384)?4096 //拿出4096个hash 槽给主机192.168.4.58
+	What is the receiving node ID?  c5e0da48f335c46a2ec199faa99b830f537dd8a0  //主机192.168.4.58的id值
+	Source node #1:all      //从当前所有master服务器获取hash槽
+	Do you want to proceed with the proposed reshard plan (yes/no)?yes //同意以上配置
+
+8、添加 slave 服务器   (会自动同步主服务器的数据)
+	]# redis-trib.rb add-node --slave [--master-id ID值] 192.168.4.59:6359  192.168.4.51:6351  //执行添加命令 ,如果不指定主节点,会把新节点随机添加为从节点最少的主库
+	[OK] New node added correctly	//提示添加完成
+
+9、移除服务器
+	---从服务器没有槽可以直接移除,移除后服务器会停止运行
+	]# redis-trib.rb  del-node 主机:端口 ID值   //执行移除命令
+
+	---移除 master 服务器前先删除占用的 hash 槽
+	指定移出slots 个数
+	指定接受 slots 主机ID
+	指定移出 slots 主机ID
+
+	]# redis-trib.rb  reshard IP:端口  //重新分片
+	How many slots do you want to move (from 1 to 16384)?4096 //移除4096个数槽
+	What is the receiving node ID?  bc5c4e082a5a3391b634cf433a6486c867cfc44b //要移动给谁的id即目标主机（这里可以随机写一个master的ID）  
+	Source node #1: c5e0da48f335c46a2ec199faa99b830f537dd8a0 //从谁那移动即源主机（这里写4.58的ID）  
+	Source node #2:done  //设置完毕
+	]# redis-trib.rb  del-node 主机:端口 ID值   //执行移除命令
+
+############################################################################
+								(三)
+		1、redis主从复制
+	工作原理
+		slave向 master 发送 sync 命令
+		master 启动后台存盘进程,并收集所有修改数据命令
+		master 完成后台存盘后,传送整个数据文件到 slave
+		slave 接收数据文件,加载到内存中完成首次完全同步
+		后续有新数据产生时. master 继续收集数据修改命令依次传给slave ,完成同步
+1.1、结构	
+	一主一从       一主多从     主从从 
+
+1.2、一主一从 
+	配置从库
+		redis 服务运行后,默认都是 master 服务器
+	192.168.4.52:6352> info replication     //查看复制信息
+	role:slave					//角色
+	master_host:192.168.4.51	//主库ip地址
+	master_port:6351			//主库端口
+	master_link_status:up		//连接状态
+
+		192.168.4.52:6352> slaveof IP 端口     //命令行下临时配置为从库,重启失效
+		192.168.4.52:6352> slaveof no one	// 临时取消从库, 恢复为主库
+
+		]# vim /etc/redis/6379.conf   
+		282 slaveof IP 端口 //在文件末尾添加或在原有配置项上修改都可以
+	1.2-1、带验证的主从复制
+		配置 master 
+			设置连接密码 ,重启服务
+		]# vim +501 /etc/redis/6351.conf
+			requirepass  密码   //设置密码
+		//查看 slave 服务状态信息		
+		配置 slave
+			设置连接密码 ,重启服务
+		]# vim +289 /etc/redis/6379.conf 
+			masterauth  密码   //设置链接主库的密码 
+		//查看 slave 服务状态信息
+
+2、哨兵服务    (安装源码软件redis ，无需做初始化配置)
+	监视 master 服务器
+	发现 master 宕机后,将从服务器升级为主服务器
+	配置文件     sentinel.conf
+	2.1、配置文件
+		]# vim  /etc/sentinel.conf  //创建主配置文件
+		sentinel monitor server51 IP 端口   票数 //监视主服务器
+		bind  0.0.0.0 //哨兵服务地址（表示本机所有网络接口）
+		sentinel auth-pass  server51 密码 //主服务器密码
+票数 : 发现主库宕机的哨兵服务器个数
+		]# redis-sentinel /etc/sentinel.conf    //启动哨兵服务
+
+3、持久化   (两种持久化模式同时开启时AOF优先)
+	3.1、RDB介绍
+		redis数据库文件,Redis DataBase
+		--数据持久化方式之一
+		--数据持久化默认方式
+		--按照指定时间间隔,将内存中的数据集快照写入硬盘
+		--快照术语 Snapshot
+		--回复时,将快照文件直接读入内存
+		定义 RDB 文件名
+		dbfilename "dump.rdb"	//文件名
+
+		3.1-2、优化设置
+	数据从内存保存到硬盘的频率
+	save 900 1 		//900秒内且有1个key改变
+	save 300 10 	//300秒内且有10个key改变
+	save 60 10000	//60秒内且有10000个key改变
+		手动存盘
+	save		//阻塞写存盘
+	bgsave		//不阻塞写存盘
+
+		3.1-3、RDB恢复数据
+	备份数据
+		cp 数据库目录/dump.rdb 备份目录
+	恢复数据
+		拷贝备份文件到数据库目录,重启 redis 服务
+		3.1-4、优缺点
+	高性能的持久实现--------创建一个子进程来执行持久化,先将数据写入临时文件,持久化过程结束后,再用这个临时文件替换上次持久化好的文件; 过程中主进程不做任何IO操作
+	比较适合大规模数据恢复,且对数据完整性要求不是非常高的场合
+	意外宕机时,丢失最后一次持久化的所有以数据
+
+	3.2、AOF文件恢复数据
+		Append Only File
+	追加方式记录写操作的文件
+	记录 redis 服务所有写操作
+	不断得将新的写操作,追加到文件的末尾
+	默认没有启用
+	使用 cat 命令可以查看文件内容
+		启用AOF  (开启后 /var/lib/redis/6379/ 目录下出现 appendonly.aof文件)
+	192.168.4.51:6351> config set appendonly yes //启用aof，默认no
+	192.168.4.51:6351> config  rewrite //写进配置文件
+		3.2-1、用AOF文件恢复数据
+			]# cp appendonly.aof /tmp/appendonly.aof	//备份文件
+			]# scp /tmp/appendonly.aof  root@192.168.4.57:/root/  //传递备份文件给目标主机
+			]# vim +673 /etc/redis/6379.conf
+			appendonly  yes  //启用AOF
+			appendfilename	"appendonly.aof"	//指定文件名
+		3.2-2、AOF文件记录写操作的方式
+			appendfsync	always		//时时记录,并完成磁盘同步
+			appendfsync	everysec	//每秒记录一次,并完成磁盘同步
+			appendfsync	no			//写入AOF,不执行磁盘同步
+		3.2-2、优化配置
+			日志文件会不断增大,何时触发日志重写
+		auto-aof-rewrite-min-size	64mb  //首次重写触发值
+		auto-aof-rewrite-percentage	100		//在次重写,增长百分比
+		3.2-3、修复AOF文件
+			当 appendonly.aof 文件被修改时可以执行该命令修复
+		redis-check-aof --fix 文件所在目录
+		3.2-4、优缺点
+			可以灵活的设置持久化方式
+			出现意外宕机时,仅肯可能丢失  1  秒的数据
+			持久化文件的体积通常会大于 RDB 方式
+			执行fsync 策略时的速度可能会比 RDB 方式慢
+
+			4、数据类型
+1、String字符串
+	set key value [EX seconds] [PX milliseconds] [NX|XX]
+		设置 key 及值, 过期时间可以使用秒或毫秒为单位
+	setrange key offset value
+		从偏移量开始复写 key 的特定位的值
+		>set first "hello world"
+		>setrange first 6 "Redis"		//改写为hello Redis
+
+	strlen key
+		统计字串长度
+		>strlen first
+	
+	append key value
+		存在则追加,不存在则创建 key 及 value ,返回 key 长度
+	setbit key offset value
+		对 key 所存储字串,设置或清除特定偏移量上的位(bit)
+		value 值可以为 1 或 0 ,offset 为 0~2^23 之间
+		key 不存在 , 则创建新 key
+	bitcount key
+		统计字串中被设置为 1 的比特位数量
+	
+	decr key
+		将 key 中的值减 1 ,key 不存在则先初始化为 0 ,再减 1
+	decrby key decrement
+		将 key 中的值 减去 decrement
+
+	get key 
+		返回 key 存储的字符串值 若 key 不存在则返回 nul
+		若 key 的值不是字串 则返回错误 get 只能处理字串
+	getrange key start end 
+		返回字符串值中的子字串,截取范围为 start 和 end
+		负数偏移量表示从末尾开始计数 -1 表示最后一个字符 -2 表示表示倒数第二个字符
+
+	incr key
+		将 key 的值加1 如果 key不存在 则初始化为 0 后再加 1 
+		主要应用为计数器
+	incrby key increment
+		将 key 的值增加 increment
+	
+	incrbyfloat key increment
+		为 key 中所储存的值加上浮点数增量
+	
+	mget key
+		获取一个或多个 key 值 ,空格分离 具有原子性
+	mset key value [key value....]
+		设置多个 key 及值 空格分离 具有原子性
+
+2、List列表
+	Redis的 list	 是一个字符队列
+	先进后出
+	一个 key 可以有多个值
+lpush key value [value.....]
+	将一个或多个值 value 插入到列表的 key 的表头
+	key 不存在 ,则创建 key
+	>lpush list a b c  	//list值依次为c b a
+lrange key start stop
+	//从开始位置读取key的值到stop结束
+	lrange list 0 2        //从0位开始，读到2位为止
+	lrange list 0 -1    //从开始读到结束为止
+	lrange list 0 -2        //从开始读到倒数第2位值
+lpop key 
+	移除并返回列表头元素数据，key不存在则返回nil
+		lpop list    //删除表头元素，可以多次执行
+
+llen key 
+	返回列表key的长度
+lindex key index 
+	返回列表中第 index 个值
+lset key index value 
+	将 key 中 index 位置的值修改为 value
+
+rpush key value [value…] 
+	将 value 插入到 key 的末尾
+rpop key 
+	删除并返回key末尾的值
+
+3、Hash值
+	是一个 string 类型的 field 和 value 的映射表
+	一个 key 可对应多个 field 一个field 对应一个 value 
+	将一个对象存储为 hash 类型 较于每个字段都存储成 string 类型更能节省内存
+hset key field value
+	将 hash 表中 field 值设置为 value
+hget key field
+	获取 hash 表中 field 的值
+hmset key field value [field value.....]
+	同时给 hash 表中的多个 field 赋值
+hmget key field [field.....]
+	返回 hash 表中多个 field 的值
+hkeys key
+	返回 hash 表中所有的 field 名称
+hgetall key
+	返回 hash 表中所有的 field 值
+hvals key 
+	返回 hash 表中所有 field 值
+hdel key field [field.....]
+	删除 hash 表中多个 field 的值 不存在则忽略
+
+
+
+
