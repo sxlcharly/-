@@ -1,3 +1,9 @@
+'''增量备份
+完全备份
+
+'''
+
+
 import os
 import tarfile
 import hashlib
