@@ -1,3 +1,7 @@
+'''记录账目
+交互模式
+'''
+
 
 import os
 import pickle
